@@ -1181,6 +1181,50 @@ func runUniversalControlTests() {
     featureCheck(HIDKeyboardDevice.local(4294969256, kernel: [4294969256]) && !HIDKeyboardDevice.local(34407378380128265, kernel: [4294969256])
                  && !HIDKeyboardDevice.local(nil, kernel: []), "Another Mac's keyboards are not listed for mapping")
     featureCheck(HIDKeyboardDevice.local(34407378380128265, kernel: nil), "Without the kernel's list, every keyboard stays")
+    // Remote switch routing must accept both edges of only the forwarded switch key.
+    // No events are posted and no system preferences are written by these checks.
+    let suite = "io.gksdud.universal-control-tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let engine = Engine(defaults: defaults, discover: { [] })
+    engine.accessibilityTrusted = { true }
+    let delegate = AppDelegate(engine: engine)
+    delegate.remoteKeyboards.inKernel = { $0 < 1 << 40 }
+    let forwarded = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(engine.target.keyCode), keyDown: true)!
+    forwarded.setIntegerValueField(RemoteKeyboards.senderField!, value: 34407378380128265)
+    for type in [CGEventType.keyDown, .keyUp] {
+        forwarded.type = type
+        featureCheck(delegate.passesThroughRemoteSwitch(forwarded), "Both remote key edges pass through")
+    }
+    forwarded.type = .keyDown
+    forwarded.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+    featureCheck(delegate.passesThroughRemoteSwitch(forwarded), "Native repeats stay with the native key pair")
+    forwarded.setIntegerValueField(.keyboardEventAutorepeat, value: 0)
+    for fieldValue in [Int64(0), 4294969256] {
+        forwarded.setIntegerValueField(RemoteKeyboards.senderField!, value: fieldValue)
+        featureCheck(!delegate.passesThroughRemoteSwitch(forwarded), "Local and posted events keep the managed path")
+    }
+    forwarded.setIntegerValueField(RemoteKeyboards.senderField!, value: 34407378380128265)
+    forwarded.setIntegerValueField(.keyboardEventKeycode, value: 0)
+    featureCheck(!delegate.passesThroughRemoteSwitch(forwarded), "Ordinary remote typing is outside remote switch routing")
+    forwarded.setIntegerValueField(.keyboardEventKeycode, value: Int64(engine.target.keyCode))
+    forwarded.type = .flagsChanged
+    featureCheck(!delegate.passesThroughRemoteSwitch(forwarded), "Modifier events are outside remote switch routing")
+    forwarded.type = .keyDown
+    for feature in ["longPressCapsLock", "addedSources"] {
+        defaults.set(true, forKey: feature)
+        featureCheck(!delegate.passesThroughRemoteSwitch(forwarded), "Advanced switching keeps its existing path")
+        defaults.set(false, forKey: feature)
+    }
+    defaults.set(false, forKey: "active")
+    featureCheck(!delegate.passesThroughRemoteSwitch(forwarded), "Inactive apps do not claim the remote switch path")
+    defaults.set(true, forKey: "active"); engine.paused = true
+    featureCheck(!delegate.passesThroughRemoteSwitch(forwarded), "Paused apps do not claim the remote switch path")
+    engine.paused = false
+    defaults.set("F20", forKey: "target")
+    featureCheck(!delegate.passesThroughRemoteSwitch(forwarded), "A former switch key is no longer claimed")
+    forwarded.setIntegerValueField(.keyboardEventKeycode, value: Int64(engine.target.keyCode))
+    featureCheck(delegate.passesThroughRemoteSwitch(forwarded), "The selected internal switch key is used")
     // The other Mac's key-up right after a long press here, still in the switching window, is not learned from; the next
     // press from there sets the case straight whatever the lock here did meanwhile.
     for upper in [false, true] {

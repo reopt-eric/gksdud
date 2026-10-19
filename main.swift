@@ -782,6 +782,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     if decision.switchNow { _ = owner.switchSeparate(event) }
                     return decision.consume ? nil : Unmanaged.passUnretained(event)
                 }
+                // The sending Mac already mapped this key. Keep both native edges
+                // instead of consuming them and reposting a shortcut on this Mac.
+                if owner.passesThroughRemoteSwitch(event) {
+                    if type == .keyDown && !repeated { owner.rememberCapsBeforeSwitch(event) }
+                    return Unmanaged.passUnretained(event)
+                }
                 if owner.engine.active && type == .keyDown && !repeated && code == Int64(owner.engine.target.keyCode) {
                     owner.tapTargetDown = ProcessInfo.processInfo.systemUptime
                     owner.rememberCapsBeforeSwitch(event)
@@ -818,6 +824,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         CFRunLoopAddSource(CFRunLoopGetMain(), keyTapSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         updatePressAccess()
+    }
+    func passesThroughRemoteSwitch(_ event: CGEvent) -> Bool {
+        guard engine.active, !engine.paused,
+              !engine.longPressCapsLock, !addedSourcesActive,
+              event.type == .keyDown || event.type == .keyUp,
+              event.getIntegerValueField(.keyboardEventKeycode) == Int64(engine.target.keyCode) else { return false }
+        return remoteKeyboards.sentFromOtherMac(event)
     }
     // With Universal Control in front, the keys go to another Mac. Only with a keyboard mapped here: others have nothing to
     // carry the lock there, and Input Monitoring would be asked for nothing.
